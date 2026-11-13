@@ -391,6 +391,7 @@ function Course({ geo, w }: { geo: Geo; w: number }) {
           </g>
         ),
       )}
+      {segs.map((s, i) => (s.over === "pond" ? <Bridge key={`br${i}`} seg={s} k={k} mobile={mobile} /> : null))}
       {segs.map((s, i) =>
         s.miss?.kind === "bunker" ? (
           <g key={`mb${i}`} transform={`translate(${s.miss.m.x} ${s.miss.m.y}) scale(${Math.max(k, 0.75)})`}>
@@ -418,6 +419,62 @@ function Course({ geo, w }: { geo: Geo; w: number }) {
       <ellipse cx={cup.x} cy={cup.y} rx={9} ry={5} fill="#070b07" />
       <ellipse cx={cup.x} cy={cup.y} rx={9} ry={5} fill="none" stroke="#a9cc9d" strokeWidth={0.9} />
     </svg>
+  );
+}
+
+/** A footbridge laid along his walk, spanning the pond with a little to spare. */
+function Bridge({ seg, k, mobile }: { seg: Seg; k: number; mobile: boolean }) {
+  const wk = seg.walks[seg.walks.length - 1];
+  const c = seg.overAt;
+  const rx = 98 * k;
+  const ry = 56 * k;
+  const dx = wk.to.x - wk.from.x;
+  const dy = wk.to.y - wk.from.y;
+  const fx = (wk.from.x - c.x) / rx;
+  const fy = (wk.from.y - c.y) / ry;
+  const qa = (dx / rx) ** 2 + (dy / ry) ** 2;
+  const qb = 2 * (fx * (dx / rx) + fy * (dy / ry));
+  const qc = fx * fx + fy * fy - 1;
+  const disc = qb * qb - 4 * qa * qc;
+  if (disc <= 0) return null;
+  const t1 = (-qb - Math.sqrt(disc)) / (2 * qa);
+  const t2 = (-qb + Math.sqrt(disc)) / (2 * qa);
+  const seglen = Math.hypot(dx, dy);
+  const L = (t2 - t1) * seglen + 30;
+  const tm = (t1 + t2) / 2;
+  const cx = wk.from.x + dx * tm;
+  const cy = wk.from.y + dy * tm;
+  const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const bw = mobile ? 26 : 36;
+  const planks = Math.floor(L / 7);
+  const posts = Math.max(2, Math.round(L / 34));
+
+  return (
+    <g transform={`translate(${cx} ${cy}) rotate(${ang})`}>
+      <rect x={-L / 2 + 4} y={-bw / 2 + 7} width={L} height={bw} rx={3} fill="#000" opacity={0.3} />
+      <rect x={-L / 2} y={-bw / 2} width={L} height={bw} rx={3} fill="#9a7550" />
+      {Array.from({ length: planks }, (_, n) => {
+        const x = -L / 2 + 3.5 + n * 7;
+        return <line key={n} x1={x} y1={-bw / 2 + 2} x2={x} y2={bw / 2 - 2} stroke="#6f5233" strokeWidth={1.1} opacity={0.75} />;
+      })}
+      <rect x={-L / 2} y={-bw / 2} width={L} height={bw * 0.28} rx={2} fill="#fff" opacity={0.06} />
+      {[-1, 1].map((side) => (
+        <g key={side}>
+          <rect x={-L / 2} y={side * (bw / 2) - 1.6} width={L} height={3.2} rx={1.4} fill="#5c4127" />
+          {Array.from({ length: posts + 1 }, (_, n) => (
+            <rect
+              key={n}
+              x={-L / 2 + (n * (L - 5)) / posts}
+              y={side * (bw / 2) - 2.6}
+              width={5}
+              height={5.2}
+              rx={1}
+              fill="#45301c"
+            />
+          ))}
+        </g>
+      ))}
+    </g>
   );
 }
 
@@ -604,8 +661,9 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
         // legs: [thigh, shin] angles; A is the trail leg, B the lead leg
         const sw = Math.sin(ph);
         const cw = Math.cos(ph);
-        const stA = [8 - 30 * thru + 4 * back, 10 + 44 * thru];
-        const stB = [-24 + 16 * thru - 3 * back, 12 - 10 * thru];
+        // facing +x a right-hander shows his right side: legB (drawn in front) is the trail leg
+        const stA = [-24 + 16 * thru - 3 * back, 12 - 10 * thru];
+        const stB = [8 - 30 * thru + 4 * back, 10 + 44 * thru];
         const wkA = [sw * 27, 6 + 36 * Math.max(0, -cw)];
         const wkB = [-sw * 27, 6 + 36 * Math.max(0, cw)];
         const A = [lerp(stA[0], wkA[0], amp), lerp(stA[1], wkA[1], amp)];
@@ -632,7 +690,13 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
         // far arm: two-bone reach to the grip, or swinging free on the walk
         const sx = 1.5, sy = -38.5, L = 10.5;
         const ar = a * rad;
-        const gripPt = { x: 3 - 17.5 * Math.sin(ar), y: -39 + 17.5 * Math.cos(ar) };
+        const cr = c * rad;
+        const gdx = 3.2 * Math.sin(cr);
+        const gdy = 20 - 3.2 * Math.cos(cr);
+        const gripPt = {
+          x: 3 + gdx * Math.cos(ar) - gdy * Math.sin(ar),
+          y: -39 + gdx * Math.sin(ar) + gdy * Math.cos(ar),
+        };
         const fr = (-sw * 30 * amp - 150 * cheer) * rad;
         const freePt = { x: sx - 20 * Math.sin(fr), y: sy + 20 * Math.cos(fr) };
         const g = grip;
@@ -814,8 +878,10 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
       setGolfer(g.pos.x, g.pos.y, g.face, a, c, lean, g.ph, g.amp);
 
       // Roxie sets off a beat after him and catches up a beat later
-      const dg = walkAt(t - 0.022);
-      setDog(dg.pos.x + dogOff.x, dg.pos.y + dogOff.y, dg.face, dg.ph * 1.7, dg.amp, 1 - dg.amp, wag);
+      // on the move she falls in single file behind him, so she crosses the bridges too
+      const dg = walkAt(t - 0.04);
+      const spread = 1 - dg.amp;
+      setDog(dg.pos.x + dogOff.x * spread, dg.pos.y + dogOff.y * spread, dg.face, dg.ph * 1.7, dg.amp, spread, wag);
 
       // sand / leaf burst where the miss lands, and a shout
       const puff = el.puff as SVGGElement;
@@ -877,6 +943,27 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                 )),
               )}
 
+              <defs>
+                {[
+                  ["aloha", "#f2674a"],
+                  ["alohaShade", "#c94a32"],
+                ].map(([id, base]) => (
+                  <pattern key={id} id={id} width={10} height={10} patternUnits="userSpaceOnUse" patternTransform="rotate(-12)">
+                    <rect width={10} height={10} fill={base} />
+                    <path d="M 7.2 0.6 Q 10.4 1.6 9.4 4.6 Q 7 3.6 7.2 0.6 Z" fill="#1f8a5b" />
+                    <path d="M 0.4 6.4 Q 3.2 6.6 3.4 9.6 Q 0.4 9.2 0.4 6.4 Z" fill="#2fae6e" />
+                    {[0, 72, 144, 216, 288].map((r) => (
+                      <ellipse key={r} cx={3.4} cy={1.8} rx={1.15} ry={1.7} fill="#fff3e0" transform={`rotate(${r} 3.4 3.4)`} />
+                    ))}
+                    <circle cx={3.4} cy={3.4} r={0.8} fill="#ffd23f" />
+                    {[0, 90, 180, 270].map((r) => (
+                      <ellipse key={r} cx={7.8} cy={6.9} rx={0.75} ry={1.1} fill="#ffd23f" transform={`rotate(${r} 7.8 7.8)`} />
+                    ))}
+                    <circle cx={7.8} cy={7.8} r={0.5} fill="#ff5fa2" />
+                  </pattern>
+                ))}
+              </defs>
+
               {/* flag */}
               <g>
                 <line x1={geo.cup.x} y1={geo.cup.y} x2={geo.cup.x} y2={geo.cup.y - 64} stroke="#f4f1e6" strokeWidth={2} strokeLinecap="round" />
@@ -922,7 +1009,8 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                     <circle cx={21.7} cy={-19.6} r={1.15} fill="#0d0f10" />
                     <circle cx={15} cy={-21.8} r={0.75} fill="#a8743f" />
                     <circle cx={15.6} cy={-20.9} r={0.6} fill="#f4f1e6" />
-                    <path d="M 9.5 -17.2 Q 12 -15.4 14.6 -16.4" fill="none" stroke="#e07a5f" strokeWidth={1.3} strokeLinecap="round" />
+                    <path d="M 9.5 -17.2 Q 12 -15.4 14.6 -16.4" fill="none" stroke="#ff5fa2" strokeWidth={1.5} strokeLinecap="round" />
+                    <circle cx={12.2} cy={-14.9} r={0.95} fill="#ffd23f" />
                   </g>
                   <g ref={part("dogLegFA")}>
                     <line x1={7} y1={-10} x2={7.5} y2={-0.8} stroke="#17191b" strokeWidth={2.8} strokeLinecap="round" />
@@ -961,18 +1049,30 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                     </g>
                   </g>
                   <g ref={part("body")}>
-                    {/* far arm */}
-                    <line ref={part("farUpper")} stroke="#2f7385" strokeWidth={4.2} strokeLinecap="round" />
+                    {/* far (left) arm, gloved */}
+                    <line ref={part("farUpper")} stroke="url(#alohaShade)" strokeWidth={4.6} strokeLinecap="round" />
                     <line ref={part("farFore")} stroke="#c69c7c" strokeWidth={3} strokeLinecap="round" />
-                    <circle ref={part("farHand")} r={2} fill="#c69c7c" />
-                    {/* shorts and polo */}
+                    <circle ref={part("farHand")} r={2.2} fill="#f4f1e6" />
+                    {/* shorts, then an untucked Hawaiian shirt */}
                     <path d="M -4.4 -28 L 5.2 -28 L 5.6 -21.5 Q 0.5 -19.5 -4.6 -21.5 Z" fill="#222a30" />
-                    <path d="M -4 -26.5 L -2.6 -37.5 Q -1.8 -42.4 3 -42.4 Q 7.6 -42.4 7.4 -37.5 L 5 -26.5 Z" fill="#3d8ea0" />
-                    <circle cx={0} cy={-31} r={1} fill="#8fd0d8" />
-                    <circle cx={3.6} cy={-34.5} r={1} fill="#f1e6b8" />
-                    <circle cx={1.2} cy={-38} r={0.9} fill="#8fd0d8" />
-                    <circle cx={3.4} cy={-29.4} r={0.9} fill="#2a6676" />
-                    <line x1={-4.2} y1={-27.2} x2={5.1} y2={-27.2} stroke="#0f1315" strokeWidth={1.4} />
+                    <path d="M -5.2 -24.6 L -3.5 -38.2 Q -2.5 -42.8 3 -42.8 Q 8.2 -42.8 8.2 -38.2 L 6.6 -24.6 Q 0.7 -23.4 -5.2 -24.6 Z" fill="url(#aloha)" stroke="#b8402a" strokeWidth={0.5} />
+                    <line x1={3} y1={-39} x2={2.6} y2={-24} stroke="#b8402a" strokeWidth={0.5} opacity={0.8} />
+                    <path d="M 1.1 -42.7 L 3 -39.4 L 4.9 -42.7 Z" fill="#e3b796" />
+                    <path d="M -0.6 -42.4 L 3 -38.6 L 2.2 -42.8 Z" fill="#fff3e0" />
+                    <path d="M 6.6 -42.4 L 3 -38.6 L 3.8 -42.8 Z" fill="#fff3e0" />
+                    {/* flower lei */}
+                    {Array.from({ length: 9 }, (_, n) => {
+                      const th = (n / 8) * Math.PI;
+                      return (
+                        <circle
+                          key={n}
+                          cx={3 + 4 * Math.cos(th)}
+                          cy={-42.2 + 4.6 * Math.sin(th)}
+                          r={1.05}
+                          fill={["#ff5fa2", "#ffd23f", "#b77bff", "#fff3e0"][n % 4]}
+                        />
+                      );
+                    })}
                     <g ref={part("head")}>
                       <line x1={2.6} y1={-41.5} x2={3.2} y2={-46.5} stroke="#e3b796" strokeWidth={3.6} strokeLinecap="round" />
                       <ellipse cx={3.6} cy={-51} rx={5.3} ry={5.8} fill="#e3b796" />
@@ -984,7 +1084,6 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                       <path d="M -2 -52.6 Q -1.4 -58.6 3.8 -58.8 Q 8.6 -58.6 9.2 -53.4 L -2 -52.2 Z" fill="#15191c" />
                       <path d="M 8.2 -54.4 L 15.2 -53.2 Q 16.2 -52.2 15 -51.9 L 8.6 -52.6 Z" fill="#0d1012" />
                       <circle cx={5.4} cy={-55.6} r={0.9} fill="#90a68a" />
-                      <path d="M 1 -41.8 L 3.2 -43.6 L 5.6 -41.8" fill="none" stroke="#8fd0d8" strokeWidth={1.1} strokeLinecap="round" />
                     </g>
                     {/* lead arm and club */}
                     <g ref={part("arm")}>
@@ -995,8 +1094,8 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                         <line x1={-0.6} y1={25.3} x2={6.3} y2={25.5} stroke="#cfd3d6" strokeWidth={0.7} />
                       </g>
                       <line x1={3} y1={-39} x2={3} y2={-20} stroke="#e3b796" strokeWidth={3.4} strokeLinecap="round" />
-                      <line x1={3} y1={-39} x2={3} y2={-31.5} stroke="#3d8ea0" strokeWidth={4.8} strokeLinecap="round" />
-                      <circle cx={3} cy={-19} r={2.3} fill="#f4f1e6" />
+                      <line x1={3} y1={-39} x2={3} y2={-31} stroke="url(#aloha)" strokeWidth={5.6} strokeLinecap="round" />
+                      <circle cx={3} cy={-19} r={2.3} fill="#e3b796" />
                     </g>
                   </g>
                 </g>
