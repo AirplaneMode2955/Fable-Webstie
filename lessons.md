@@ -1,0 +1,1 @@
+- Never write into the existing Website-V2 working tree when asked for a "new project"; build in a separate folder.
