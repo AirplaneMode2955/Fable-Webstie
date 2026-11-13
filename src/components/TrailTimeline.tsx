@@ -153,6 +153,9 @@ type Seg = {
 /** Which shots go wrong, so he needs a second try. */
 const MISSES: Record<number, "trees" | "bunker"> = { 1: "trees", 4: "bunker", 6: "trees", 9: "bunker" };
 
+/** Ball flight timing: quick off the face, hanging as it comes down. */
+const flightEase = (x: number) => 1 - Math.pow(1 - x, 1.4);
+
 const arcPath = (a: Pt, b: Pt, peak: number) =>
   `M ${a.x} ${a.y} Q ${(a.x + b.x) / 2} ${(a.y + b.y) / 2 - peak * 2} ${b.x} ${b.y}`;
 
@@ -433,7 +436,7 @@ function Arc({
   H: number;
   progress: MotionValue<number>;
 }) {
-  const drawn = useTransform(progress, (p) => clamp(((p * H - y0) / len - shot.impact) / shot.flight));
+  const drawn = useTransform(progress, (p) => flightEase(clamp(((p * H - y0) / len - shot.impact) / shot.flight)));
   return (
     <>
       <path d={shot.d} fill="none" stroke="#f4f1e6" strokeWidth={1.6} strokeLinecap="round" strokeDasharray="2 9" opacity={0.22} />
@@ -543,18 +546,15 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
   const reduce = useReducedMotion();
   const wrapRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
-  const ballRef = useRef<SVGGElement>(null);
-  const ballBodyRef = useRef<SVGGElement>(null);
-  const shadowRef = useRef<SVGEllipseElement>(null);
-  const golferRef = useRef<SVGGElement>(null);
-  const bodyRef = useRef<SVGGElement>(null);
-  const armRef = useRef<SVGGElement>(null);
-  const clubRef = useRef<SVGGElement>(null);
-  const legARef = useRef<SVGLineElement>(null);
-  const legBRef = useRef<SVGLineElement>(null);
-  const flagRef = useRef<SVGPolygonElement>(null);
-  const puffRef = useRef<SVGGElement>(null);
-  const bubbleRef = useRef<SVGTextElement>(null);
+  // every animated SVG node, by name
+  const rig = useRef<Record<string, SVGElement | null>>({});
+  const part = useCallback(
+    (name: string) => (el: SVGElement | null) => {
+      rig.current[name] = el;
+      el?.setAttribute("data-part", name);
+    },
+    [],
+  );
   const [w, setW] = useState(0);
 
   useEffect(() => {
@@ -573,65 +573,176 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
 
   const place = useCallback(
     (p: number) => {
-      const ball = ballRef.current;
-      const body = ballBodyRef.current;
-      const shadow = shadowRef.current;
-      const golfer = golferRef.current;
-      const torso = bodyRef.current;
-      const arm = armRef.current;
-      const club = clubRef.current;
-      const legA = legARef.current;
-      const legB = legBRef.current;
-      const flag = flagRef.current;
-      const puff = puffRef.current;
-      const bubble = bubbleRef.current;
-      if (!geo || !ball || !body || !shadow || !golfer || !torso || !arm || !club || !legA || !legB || !flag || !puff || !bubble)
-        return;
+      const el = rig.current;
+      const need = [
+        "ball", "ballBody", "ballShadow", "golfer", "rig", "body", "head", "arm", "club", "farUpper", "farFore", "farHand",
+        "legA", "shinA", "legB", "shinB", "golferShadow", "flag", "puff", "divot", "bubble",
+        "dog", "dogBody", "dogTail", "dogHead", "dogLegFA", "dogLegFB", "dogLegBA", "dogLegBB", "dogShadow",
+      ];
+      if (!geo || need.some((k) => !el[k])) return;
+      const set = (k: string, t: string) => el[k]!.setAttribute("transform", t);
+      const fade = (k: string, o: number) => ((el[k] as SVGElement).style.opacity = String(o));
 
       const { stops, segs, puttLen, H, scale, cup, mobile } = geo;
       const last = stops[stops.length - 1];
       const y = clamp(p) * H;
       const reach = REACH * scale;
+      const rad = Math.PI / 180;
 
-      const setGolfer = (x: number, gy: number, face: number, a: number, c: number, lean: number, stride: number) => {
-        golfer.setAttribute("transform", `translate(${x} ${gy}) scale(${face * scale} ${scale})`);
-        torso.setAttribute("transform", `rotate(${lean} 0 -24)`);
-        arm.setAttribute("transform", `rotate(${a} 3 -39)`);
-        club.setAttribute("transform", `translate(3 -19) rotate(${c})`);
-        legA.setAttribute("transform", `rotate(${stride} 0 -24)`);
-        legB.setAttribute("transform", `rotate(${-stride} 0 -24)`);
+      /**
+       * Pose the golfer. `a`/`c`/`lean` are the swing keyframes; `ph` is the walk
+       * cycle phase and `amp` (0..1) how much of the walk is blended in.
+       */
+      const setGolfer = (
+        x: number, gy: number, face: number, a: number, c: number, lean: number, ph: number, amp: number, cheer = 0,
+      ) => {
+        // both hands are on the club unless it is slung over his shoulder
+        const grip = clamp((c + 125) / 21) * (1 - amp);
+        const back = grip * clamp(a / 150); // backswing
+        const thru = grip * clamp(-(a + 18) / 124); // follow-through
+
+        // legs: [thigh, shin] angles; A is the trail leg, B the lead leg
+        const sw = Math.sin(ph);
+        const cw = Math.cos(ph);
+        const stA = [8 - 30 * thru + 4 * back, 10 + 44 * thru];
+        const stB = [-24 + 16 * thru - 3 * back, 12 - 10 * thru];
+        const wkA = [sw * 27, 6 + 36 * Math.max(0, -cw)];
+        const wkB = [-sw * 27, 6 + 36 * Math.max(0, cw)];
+        const A = [lerp(stA[0], wkA[0], amp), lerp(stA[1], wkA[1], amp)];
+        const B = [lerp(stB[0], wkB[0], amp), lerp(stB[1], wkB[1], amp)];
+        const footY = (l: number[]) => 12 * Math.cos(l[0] * rad) + 12 * Math.cos((l[0] + l[1]) * rad);
+        const drop = 24 - Math.max(footY(A), footY(B)); // keep the planted foot on the turf
+        const shift = -1.6 * back + 3.2 * thru;
+
+        set("golfer", `translate(${x} ${gy}) scale(${face * scale} ${scale})`);
+        set("rig", `translate(${shift} ${drop})`);
+        set("legA", `rotate(${A[0]} 0 -24)`);
+        set("shinA", `translate(0 -12) rotate(${A[1]})`);
+        set("legB", `rotate(${B[0]} 0 -24)`);
+        set("shinB", `translate(0 -12) rotate(${B[1]})`);
+        const bodyLean = lean + 5 * amp + 10 * grip * (1 - thru) * (1 - cheer);
+        set("body", `rotate(${bodyLean} 0 -24)`);
+        // eyes stay on the ball through impact, then come up to watch it fly
+        const headTilt = grip * lerp(16, -22, clamp(thru * 2.2)) - bodyLean * 0.6 - 14 * cheer;
+        set("head", `rotate(${headTilt} 3 -43)`);
+        set("arm", `rotate(${a} 3 -39)`);
+        set("club", `translate(3 -19) rotate(${c})`);
+        (el.golferShadow as SVGElement).setAttribute("rx", String(11 + 3 * amp * Math.abs(sw)));
+
+        // far arm: two-bone reach to the grip, or swinging free on the walk
+        const sx = 1.5, sy = -38.5, L = 10.5;
+        const ar = a * rad;
+        const gripPt = { x: 3 - 17.5 * Math.sin(ar), y: -39 + 17.5 * Math.cos(ar) };
+        const fr = (-sw * 30 * amp - 150 * cheer) * rad;
+        const freePt = { x: sx - 20 * Math.sin(fr), y: sy + 20 * Math.cos(fr) };
+        const g = grip;
+        let tx = lerp(freePt.x, gripPt.x, g);
+        let ty = lerp(freePt.y, gripPt.y, g);
+        let d = Math.hypot(tx - sx, ty - sy);
+        const max = 2 * L - 0.2;
+        if (d > max) {
+          tx = sx + ((tx - sx) / d) * max;
+          ty = sy + ((ty - sy) / d) * max;
+          d = max;
+        }
+        const h = Math.sqrt(Math.max(0, L * L - (d / 2) * (d / 2)));
+        const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+        // elbow bends away from the target line (toward his back)
+        const ex = mx + ((ty - sy) / (d || 1)) * h;
+        const ey = my - ((tx - sx) / (d || 1)) * h;
+        const line = (k: string, x1: number, y1: number, x2: number, y2: number) => {
+          const n = el[k]!;
+          n.setAttribute("x1", String(x1));
+          n.setAttribute("y1", String(y1));
+          n.setAttribute("x2", String(x2));
+          n.setAttribute("y2", String(y2));
+        };
+        line("farUpper", sx, sy, ex, ey);
+        line("farFore", ex, ey, tx, ty);
+        el.farHand!.setAttribute("cx", String(tx));
+        el.farHand!.setAttribute("cy", String(ty));
       };
-      const setBall = (bx: number, by: number, lift: number, size: number, alpha: number, sh: number) => {
-        ball.setAttribute("transform", `translate(${bx} ${by - lift})`);
-        body.setAttribute("transform", `scale(${size})`);
-        ball.style.opacity = String(alpha);
-        shadow.setAttribute("transform", `translate(${bx} ${by}) scale(${sh})`);
-        shadow.style.opacity = String(0.35 * alpha);
+
+      /** Roxie: trots when `amp` > 0, sits when `sit` > 0. */
+      const setDog = (x: number, dy: number, face: number, ph: number, amp: number, sit: number, wag: number) => {
+        const ds = scale * 0.92;
+        const bob = amp * Math.abs(Math.sin(ph * 2)) * 1.6;
+        set("dog", `translate(${x} ${dy - bob * ds}) scale(${face * ds} ${ds})`);
+        set("dogBody", `rotate(${-24 * sit} -8 -9)`);
+        const sw = Math.sin(ph * 2) * 32 * amp;
+        set("dogLegFA", `rotate(${sw + 22 * sit} 7 -10)`);
+        set("dogLegFB", `rotate(${-sw + 22 * sit} 7 -10)`);
+        set("dogLegBA", `rotate(${-sw - 78 * sit} -8 -10)`);
+        set("dogLegBB", `rotate(${sw - 78 * sit} -8 -10)`);
+        set("dogTail", `rotate(${wag} -10.5 -14)`);
+        set("dogHead", `rotate(${-10 * sit + 4 * amp * Math.sin(ph * 2)} 9 -16)`);
+        (el.dogShadow as SVGElement).setAttribute("rx", String(13 - 3 * sit));
       };
+
+      const setBall = (bx: number, by: number, lift: number, size: number, alpha: number, sh: number, spin = 0) => {
+        set("ball", `translate(${bx} ${by - lift})`);
+        set("ballBody", `scale(${size}) rotate(${spin})`);
+        fade("ball", alpha);
+        // the shadow stays on the turf and slides away from the ball as it climbs
+        set("ballShadow", `translate(${bx + lift * 0.2} ${by + lift * 0.05}) scale(${sh})`);
+        fade("ballShadow", 0.35 * alpha * (0.45 + 0.55 * sh));
+      };
+      const bubble = el.bubble as SVGTextElement;
       const setBubble = (msg: string, amount: number, x: number, ay: number, size = 1) => {
         if (bubble.textContent !== msg) bubble.textContent = msg;
         bubble.style.opacity = String(amount);
         bubble.setAttribute("transform", `translate(${x} ${ay}) scale(${size * (0.85 + 0.15 * amount)})`);
       };
+      /** Turf (and a tee, off the first box) kicked up behind the ball at impact. */
+      const setDivot = (e: number, x: number, dy: number, tee: boolean) => {
+        const divot = el.divot as SVGGElement;
+        if (e <= 0 || e >= 1) {
+          divot.style.opacity = "0";
+          return;
+        }
+        divot.style.opacity = String(1 - e * e);
+        divot.setAttribute("transform", `translate(${x} ${dy}) scale(${scale})`);
+        Array.from(divot.children).forEach((bit, idx) => {
+          const isTee = idx === 0;
+          if (isTee && !tee) {
+            bit.setAttribute("opacity", "0");
+            return;
+          }
+          bit.setAttribute("opacity", "1");
+          const vx = isTee ? 16 : -6 - idx * 5;
+          const vy = isTee ? 30 : 16 + ((idx * 7) % 11);
+          const px = vx * e;
+          const py = -vy * e + 34 * e * e;
+          bit.setAttribute("transform", `translate(${px} ${py}) rotate(${e * (isTee ? 540 : 200 + idx * 60)})`);
+        });
+      };
+
+      const wag = Math.sin(y * 0.09) * 26;
+      // phones have no room behind him, so she sits at his heel instead
+      const dogOff = mobile ? { x: -6 * scale, y: 21 * scale } : { x: -34 * scale, y: 7 * scale };
 
       if (y >= last.y) {
         /* ── the putt ── */
         const t = clamp((y - last.y) / puttLen);
         const [a, c, lean] = pose(t, PUTT_KEYS);
+        const party = clamp((t - 0.7) / 0.12);
         const hop = t > 0.82 ? -Math.abs(Math.sin(((t - 0.82) / 0.18) * Math.PI * 3)) * 7 * (1 - (t - 0.82) / 0.18) : 0;
         const gx = last.x - reach;
-        setGolfer(gx, last.y + hop, 1, a, c, lean, 0);
+        setGolfer(gx, last.y + hop, 1, a, c, lean, 0, 0, party);
+        const dogHop = t > 0.78 ? -Math.abs(Math.sin(((t - 0.78) / 0.22) * Math.PI * 4)) * 12 * (1 - (t - 0.78) / 0.22) : 0;
+        setDog(gx + dogOff.x, last.y + dogOff.y + dogHop, 1, 0, 0, 1 - party, wag * (1 + 2 * party));
 
         const s = clamp((t - 0.16) / 0.46);
         const roll = 1 - Math.pow(1 - s, 2.2);
         const drop = clamp((t - 0.62) / 0.06);
         const bx = lerp(last.x, cup.x, roll);
         const by = lerp(last.y, cup.y, roll);
-        setBall(bx, by + drop * 4, 0, 1 - drop * 0.8, 1 - drop, 1 - drop);
+        setBall(bx, by + drop * 4, 0, 1 - drop * 0.8, 1 - drop, 1 - drop, roll * 900);
 
         const wig = t > 0.64 ? Math.sin((t - 0.64) * 70) * 9 * (1 - clamp((t - 0.64) / 0.3)) : 0;
-        flag.setAttribute("transform", `rotate(${wig} ${cup.x} ${cup.y - 64})`);
-        puff.style.opacity = "0";
+        set("flag", `rotate(${wig} ${cup.x} ${cup.y - 64})`);
+        fade("puff", 0);
+        setDivot(0, 0, 0, false);
         setBubble("Birdie!", Math.sin(Math.PI * clamp((t - 0.64) / 0.34)), cup.x, cup.y - 64 - 24, 1.7);
         return;
       }
@@ -650,34 +761,64 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
           activeIdx = j;
         }
       });
-      const s = t >= active.impact ? clamp((t - active.impact) / active.flight) : 0;
+      const wayward = !!seg.miss && activeIdx === 0;
+      const s = t >= active.impact ? flightEase(clamp((t - active.impact) / active.flight)) : 0;
       const arc = 4 * s * (1 - s);
       const landT = active.impact + active.flight;
-      const u = clamp((t - landT) / 0.08);
-      const bounce = t > landT && t < landT + 0.08 ? (seg.miss && activeIdx === 0 ? 7 : 12) * 4 * u * (1 - u) : 0;
-      const gx = lerp(active.a.x, active.b.x, s);
-      const gy = lerp(active.a.y, active.b.y, s);
+      // two skips and a short release, unless it plugged in the trees or sand
+      const u = clamp((t - landT) / 0.1);
+      let bounce = 0;
+      if (t > landT && u < 1) {
+        const h1 = wayward ? 6 : 13;
+        if (u < 0.55) bounce = h1 * 4 * (u / 0.55) * (1 - u / 0.55);
+        else if (!wayward) bounce = 5 * 4 * ((u - 0.55) / 0.45) * (1 - (u - 0.55) / 0.45);
+      }
+      const span = Math.hypot(active.b.x - active.a.x, active.b.y - active.a.y) || 1;
+      const short = wayward ? 0 : Math.min(14 * scale, span * 0.2) / span;
+      const along = s * (1 - short) + short * (1 - Math.pow(1 - u, 2));
+      const gx = lerp(active.a.x, active.b.x, along);
+      const gy = lerp(active.a.y, active.b.y, along);
       let alpha = 1;
       if (seg.miss?.kind === "trees" && activeIdx === 0) {
         // the ball vanishes into the leaves until he walks up and finds it
         alpha = t < 0.34 ? 1 - clamp((s - 0.9) / 0.1) : clamp((t - 0.34) / 0.04);
       }
-      setBall(gx, gy, arc * active.peak + bounce, 1 + arc * 0.7, alpha, 1 - arc * 0.4);
-      flag.setAttribute("transform", "rotate(0)");
+      setBall(gx, gy, arc * active.peak + bounce * scale, 1 + arc * 0.7, alpha, 1 - arc * 0.45, s * 1080 + u * 360);
+      setDivot((t - active.impact) / 0.07, active.a.x, active.a.y, i === 0 && activeIdx === 0);
+      set("flag", "rotate(0)");
 
-      let pos = seg.walks[0].from;
-      let stride = 0;
-      for (const wk of seg.walks) {
-        if (t >= wk.t0) {
-          const kk = easeInOut(clamp((t - wk.t0) / (wk.t1 - wk.t0)));
-          pos = { x: lerp(wk.from.x, wk.to.x, kk), y: lerp(wk.from.y, wk.to.y, kk) };
-          if (kk > 0 && kk < 1) stride = Math.sin(kk * Math.PI * 7) * 28;
+      // walking: step length drives the leg cycle, and he turns to face where he is headed
+      const walkAt = (tt: number) => {
+        let pos = seg.walks[0].from;
+        let ph = 0, amp = 0, face = 1;
+        for (const wk of seg.walks) {
+          if (tt >= wk.t0) {
+            const raw = clamp((tt - wk.t0) / (wk.t1 - wk.t0));
+            const kk = easeInOut(raw);
+            pos = { x: lerp(wk.from.x, wk.to.x, kk), y: lerp(wk.from.y, wk.to.y, kk) };
+            const dist = Math.hypot(wk.to.x - wk.from.x, wk.to.y - wk.from.y);
+            ph = ((kk * dist) / (44 * scale)) * Math.PI * 2;
+            amp = raw > 0 && raw < 1 ? clamp(Math.min(raw, 1 - raw) / 0.07) : 0;
+            const dx = wk.to.x - wk.from.x;
+            const dir = Math.abs(dx) > 30 ? Math.sign(dx) : 1;
+            const turn = raw < 1 ? clamp(raw / 0.05) : 0;
+            const turnBack = clamp((raw - 0.95) / 0.05);
+            face = lerp(1, dir, turn * (1 - turnBack));
+            if (Math.abs(face) < 0.12) face = face < 0 ? -0.12 : 0.12;
+          }
         }
-      }
+        return { pos, ph, amp, face };
+      };
+      const g = walkAt(t);
       const [a, c, lean] = pose(t, seg.keys);
-      setGolfer(pos.x, pos.y, 1, a, c, lean, stride);
+      setGolfer(g.pos.x, g.pos.y, g.face, a, c, lean, g.ph, g.amp);
+
+      // Roxie sets off a beat after him and catches up a beat later
+      const dg = walkAt(t - 0.022);
+      setDog(dg.pos.x + dogOff.x, dg.pos.y + dogOff.y, dg.face, dg.ph * 1.7, dg.amp, 1 - dg.amp, wag);
 
       // sand / leaf burst where the miss lands, and a shout
+      const puff = el.puff as SVGGElement;
       if (seg.miss) {
         const first = seg.shots[0];
         const e = clamp((t - first.impact - first.flight) / 0.1);
@@ -699,8 +840,8 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
         setBubble(
           seg.miss.kind === "trees" ? "FORE!" : "Sand trap…",
           Math.sin(Math.PI * clamp((t - t0) / 0.2)),
-          pos.x,
-          pos.y - 62 * scale - 12,
+          g.pos.x,
+          g.pos.y - 66 * scale - 12,
         );
       } else {
         puff.style.opacity = "0";
@@ -740,42 +881,138 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
               <g>
                 <line x1={geo.cup.x} y1={geo.cup.y} x2={geo.cup.x} y2={geo.cup.y - 64} stroke="#f4f1e6" strokeWidth={2} strokeLinecap="round" />
                 <polygon
-                  ref={flagRef}
+                  ref={part("flag")}
                   points={`${geo.cup.x},${geo.cup.y - 64} ${geo.cup.x + 26},${geo.cup.y - 56} ${geo.cup.x},${geo.cup.y - 48}`}
                   fill="#e07a5f"
                 />
               </g>
 
-              <ellipse ref={shadowRef} cx={0} cy={0} rx={7} ry={3} fill="#000" />
+              <ellipse ref={part("ballShadow")} cx={0} cy={0} rx={7} ry={3} fill="#000" />
 
               {/* sand / leaf burst */}
-              <g ref={puffRef} style={{ opacity: 0 }}>
+              <g ref={part("puff")} style={{ opacity: 0 }}>
                 {[0, 1, 2, 3, 4, 5].map((n) => (
                   <circle key={n} r={3.2} fill="#e0d29b" />
                 ))}
               </g>
 
+              {/* Roxie, facing +x */}
+              <g ref={part("dog")}>
+                <ellipse ref={part("dogShadow")} cx={1} cy={0.5} rx={13} ry={3} fill="#000" opacity={0.28} />
+                <g ref={part("dogLegBB")}>
+                  <line x1={-8} y1={-10} x2={-9} y2={-0.8} stroke="#0d0f10" strokeWidth={2.8} strokeLinecap="round" />
+                  <circle cx={-8.6} cy={-0.9} r={1.7} fill="#9a6a3c" />
+                </g>
+                <g ref={part("dogBody")}>
+                  <g ref={part("dogLegFB")}>
+                      <line x1={7} y1={-10} x2={7.5} y2={-0.8} stroke="#0d0f10" strokeWidth={2.6} strokeLinecap="round" />
+                      <circle cx={7.9} cy={-0.9} r={1.6} fill="#9a6a3c" />
+                  </g>
+                  <g ref={part("dogTail")}>
+                    <path d="M -10.5 -14 Q -16 -17 -15.5 -23" fill="none" stroke="#17191b" strokeWidth={2.6} strokeLinecap="round" />
+                  </g>
+                  <path d="M -11.5 -13.5 Q -11 -19 -3 -18.6 L 8 -18.4 Q 12.5 -17.5 12 -12.5 Q 11 -8.2 5 -8.4 L -6 -8 Q -11.8 -8 -11.5 -13.5 Z" fill="#17191b" />
+                  <path d="M 8.5 -12 Q 12.4 -12.5 11.6 -9.6 Q 9.5 -8 6 -8.4 Z" fill="#a8743f" />
+                  <g ref={part("dogHead")}>
+                    <path d="M 8 -16 L 11 -21 L 14.5 -17.5 Z" fill="#17191b" />
+                    <ellipse cx={13.4} cy={-20.2} rx={4.9} ry={4.4} fill="#17191b" />
+                    <path d="M 9.6 -23.4 L 9.2 -29.6 L 13.4 -24.6 Z" fill="#17191b" />
+                    <path d="M 12.6 -24.2 L 13.6 -29.8 L 16.6 -23.6 Z" fill="#0d0f10" />
+                    <path d="M 15.2 -21.2 L 21.6 -20.4 Q 22.6 -18.6 21.2 -17.4 L 15 -16.6 Z" fill="#a8743f" />
+                    <circle cx={21.7} cy={-19.6} r={1.15} fill="#0d0f10" />
+                    <circle cx={15} cy={-21.8} r={0.75} fill="#a8743f" />
+                    <circle cx={15.6} cy={-20.9} r={0.6} fill="#f4f1e6" />
+                    <path d="M 9.5 -17.2 Q 12 -15.4 14.6 -16.4" fill="none" stroke="#e07a5f" strokeWidth={1.3} strokeLinecap="round" />
+                  </g>
+                  <g ref={part("dogLegFA")}>
+                    <line x1={7} y1={-10} x2={7.5} y2={-0.8} stroke="#17191b" strokeWidth={2.8} strokeLinecap="round" />
+                    <circle cx={8} cy={-0.9} r={1.7} fill="#a8743f" />
+                  </g>
+                </g>
+                <g ref={part("dogLegBA")}>
+                  <line x1={-8} y1={-10} x2={-9} y2={-0.8} stroke="#17191b" strokeWidth={3.2} strokeLinecap="round" />
+                  <circle cx={-8.6} cy={-0.9} r={1.8} fill="#a8743f" />
+                </g>
+              </g>
+
               {/* golfer, facing +x with the ball in front of his feet */}
-              <g ref={golferRef}>
-                <line ref={legARef} x1={0} y1={-24} x2={-6} y2={0} stroke="#cdbf9a" strokeWidth={4.5} strokeLinecap="round" />
-                <line ref={legBRef} x1={0} y1={-24} x2={7} y2={0} stroke="#cdbf9a" strokeWidth={4.5} strokeLinecap="round" />
-                <g ref={bodyRef}>
-                  <line x1={0} y1={-24} x2={3} y2={-40} stroke="#dbead6" strokeWidth={8} strokeLinecap="round" />
-                  <circle cx={3} cy={-51} r={6} fill="#e8d5bf" />
-                  <path d="M -3.2 -53 Q 3 -61.5 9.2 -53 L 15 -52.5 L 15 -51 L -3.2 -51 Z" fill="#90a68a" />
-                  <g ref={armRef}>
-                    <line x1={3} y1={-39} x2={3} y2={-19} stroke="#dbead6" strokeWidth={3.6} strokeLinecap="round" />
-                    <g ref={clubRef}>
-                      <line x1={0} y1={0} x2={0} y2={24} stroke="#d5cbb5" strokeWidth={1.8} strokeLinecap="round" />
-                      <rect x={-1.5} y={22} width={7} height={3.4} rx={1.2} fill="#d5cbb5" />
+              <g ref={part("golfer")}>
+                <ellipse ref={part("golferShadow")} cx={1} cy={0.5} rx={11} ry={3} fill="#000" opacity={0.3} />
+                <g ref={part("rig")}>
+                  {/* trail leg */}
+                  <g ref={part("legA")}>
+                    <line x1={0} y1={-24} x2={0} y2={-12} stroke="#c69c7c" strokeWidth={4.2} strokeLinecap="round" />
+                    <line x1={0} y1={-24} x2={0} y2={-15.5} stroke="#171c20" strokeWidth={6.4} strokeLinecap="round" />
+                    <g ref={part("shinA")}>
+                      <line x1={0} y1={0} x2={0} y2={10.5} stroke="#c69c7c" strokeWidth={3.6} strokeLinecap="round" />
+                      <line x1={0} y1={7.4} x2={0} y2={10} stroke="#dedbd0" strokeWidth={3.8} />
+                      <path d="M -2.4 9.6 L 3 9.6 Q 7.4 10.2 7.4 12.4 L -2.4 12.4 Z" fill="#dedbd0" />
                     </g>
-                    <circle cx={3} cy={-19} r={2.3} fill="#e8d5bf" />
+                  </g>
+                  {/* lead leg */}
+                  <g ref={part("legB")}>
+                    <line x1={0} y1={-24} x2={0} y2={-12} stroke="#e3b796" strokeWidth={4.4} strokeLinecap="round" />
+                    <line x1={0} y1={-24} x2={0} y2={-15.5} stroke="#222a30" strokeWidth={6.8} strokeLinecap="round" />
+                    <g ref={part("shinB")}>
+                      <line x1={0} y1={0} x2={0} y2={10.5} stroke="#e3b796" strokeWidth={3.8} strokeLinecap="round" />
+                      <line x1={0} y1={7.4} x2={0} y2={10} stroke="#f4f1e6" strokeWidth={4} />
+                      <path d="M -2.4 9.6 L 3 9.6 Q 7.6 10.2 7.6 12.4 L -2.4 12.4 Z" fill="#f4f1e6" />
+                      <line x1={-2.4} y1={12.3} x2={7.6} y2={12.3} stroke="#9aa39a" strokeWidth={0.7} />
+                    </g>
+                  </g>
+                  <g ref={part("body")}>
+                    {/* far arm */}
+                    <line ref={part("farUpper")} stroke="#2f7385" strokeWidth={4.2} strokeLinecap="round" />
+                    <line ref={part("farFore")} stroke="#c69c7c" strokeWidth={3} strokeLinecap="round" />
+                    <circle ref={part("farHand")} r={2} fill="#c69c7c" />
+                    {/* shorts and polo */}
+                    <path d="M -4.4 -28 L 5.2 -28 L 5.6 -21.5 Q 0.5 -19.5 -4.6 -21.5 Z" fill="#222a30" />
+                    <path d="M -4 -26.5 L -2.6 -37.5 Q -1.8 -42.4 3 -42.4 Q 7.6 -42.4 7.4 -37.5 L 5 -26.5 Z" fill="#3d8ea0" />
+                    <circle cx={0} cy={-31} r={1} fill="#8fd0d8" />
+                    <circle cx={3.6} cy={-34.5} r={1} fill="#f1e6b8" />
+                    <circle cx={1.2} cy={-38} r={0.9} fill="#8fd0d8" />
+                    <circle cx={3.4} cy={-29.4} r={0.9} fill="#2a6676" />
+                    <line x1={-4.2} y1={-27.2} x2={5.1} y2={-27.2} stroke="#0f1315" strokeWidth={1.4} />
+                    <g ref={part("head")}>
+                      <line x1={2.6} y1={-41.5} x2={3.2} y2={-46.5} stroke="#e3b796" strokeWidth={3.6} strokeLinecap="round" />
+                      <ellipse cx={3.6} cy={-51} rx={5.3} ry={5.8} fill="#e3b796" />
+                      <circle cx={8.9} cy={-50.2} r={1.15} fill="#e3b796" />
+                      <path d="M -1.7 -52.4 Q -2.6 -47.2 0.6 -45.8 L 2.4 -49.6 L 2.2 -52.4 Z" fill="#2b211a" />
+                      <circle cx={2.4} cy={-50.2} r={1.25} fill="#cf9f7e" />
+                      <circle cx={7.1} cy={-51.4} r={0.6} fill="#2b211a" />
+                      <path d="M 6.6 -48.2 Q 7.8 -47.6 8.6 -48.1" fill="none" stroke="#a9745a" strokeWidth={0.6} strokeLinecap="round" />
+                      <path d="M -2 -52.6 Q -1.4 -58.6 3.8 -58.8 Q 8.6 -58.6 9.2 -53.4 L -2 -52.2 Z" fill="#15191c" />
+                      <path d="M 8.2 -54.4 L 15.2 -53.2 Q 16.2 -52.2 15 -51.9 L 8.6 -52.6 Z" fill="#0d1012" />
+                      <circle cx={5.4} cy={-55.6} r={0.9} fill="#90a68a" />
+                      <path d="M 1 -41.8 L 3.2 -43.6 L 5.6 -41.8" fill="none" stroke="#8fd0d8" strokeWidth={1.1} strokeLinecap="round" />
+                    </g>
+                    {/* lead arm and club */}
+                    <g ref={part("arm")}>
+                      <g ref={part("club")}>
+                        <line x1={0} y1={0} x2={0} y2={23} stroke="#cfd3d6" strokeWidth={1.3} strokeLinecap="round" />
+                        <line x1={0} y1={-3.5} x2={0} y2={4.5} stroke="#15191c" strokeWidth={2.2} strokeLinecap="round" />
+                        <path d="M -1.2 21.6 Q 4 20.4 7.6 22 Q 8.8 24.6 6.4 25.6 L -0.4 25.4 Q -2 23.6 -1.2 21.6 Z" fill="#23282c" />
+                        <line x1={-0.6} y1={25.3} x2={6.3} y2={25.5} stroke="#cfd3d6" strokeWidth={0.7} />
+                      </g>
+                      <line x1={3} y1={-39} x2={3} y2={-20} stroke="#e3b796" strokeWidth={3.4} strokeLinecap="round" />
+                      <line x1={3} y1={-39} x2={3} y2={-31.5} stroke="#3d8ea0" strokeWidth={4.8} strokeLinecap="round" />
+                      <circle cx={3} cy={-19} r={2.3} fill="#f4f1e6" />
+                    </g>
                   </g>
                 </g>
               </g>
 
-              <g ref={ballRef}>
-                <g ref={ballBodyRef}>
+              {/* turf and tee kicked up at impact */}
+              <g ref={part("divot")} style={{ opacity: 0 }}>
+                <rect x={-0.7} y={-4} width={1.4} height={6} rx={0.6} fill="#f4f1e6" />
+                <rect x={-2} y={-1.2} width={4.4} height={2.2} rx={1} fill="#5c8f4f" />
+                <rect x={-1.6} y={-1} width={3.4} height={1.9} rx={0.9} fill="#6b5a3c" />
+                <rect x={-1.3} y={-0.9} width={2.8} height={1.7} rx={0.8} fill="#7fb76c" />
+                <circle r={1.1} fill="#5c8f4f" />
+              </g>
+
+              <g ref={part("ball")}>
+                <g ref={part("ballBody")}>
                   <circle r={6.5} fill="#f4f1e6" stroke="#b9b6a8" strokeWidth={0.8} />
                   <circle cx={-2} cy={-1.5} r={0.9} fill="#b9b6a8" />
                   <circle cx={1.8} cy={1} r={0.9} fill="#b9b6a8" />
@@ -784,7 +1021,7 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
               </g>
 
               <text
-                ref={bubbleRef}
+                ref={part("bubble")}
                 textAnchor="middle"
                 className="font-label"
                 fontSize={15}
