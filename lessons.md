@@ -1,1 +1,3 @@
 - Never write into the existing Website-V2 working tree when asked for a "new project"; build in a separate folder.
+- jettiverson.com deploys from this repo (Fable-Webstie), not Website-V2; check which Vercel project owns the domain before editing.
+- For the About golfer, match a right-hander filmed from the target: back to the viewer's left, finish to the right, and the club goes behind his head at the top and finish, never through it.

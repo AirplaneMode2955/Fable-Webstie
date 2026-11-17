@@ -1,8 +1,9 @@
 # Website V3 (motion rebuild)
 
-A separate, animation-heavy rebuild of jettiverson.com. The live site lives in
-the `main` branch of `AirplaneMode2955/Website-V2` and must not be edited from
-this project.
+The animation-heavy rebuild of jettiverson.com, and now the live site:
+jettiverson.com is served by the `fable-website` Vercel project, which deploys
+from this repo's `main` branch. `AirplaneMode2955/Website-V2` is the old site
+and no longer serves the domain.
 
 - Motion primitives: `src/components/motion/primitives.tsx` (SplitText,
   ScrollText, Parallax, ImageReveal, Magnetic, VelocityMarquee,
