@@ -65,14 +65,24 @@ type Stop = {
 
 const ARC_PEAK = 70;
 const REACH = 21; // ball sits this far in front of the golfer's feet (unscaled)
+/** He stands to the right of the ball, facing left, so he reads as a right-hander hitting down the page. */
+const FACE = -1;
 
 /** [time, armAngle, clubAngle, lean, easeFromPrevious] */
 type Key = [number, number, number, number, ((x: number) => number)?];
 
+/*
+ * Seen from where the ball is headed: a right-hander takes the club back to the
+ * viewer's left, comes down through the ball, extends out to the viewer's right
+ * and finishes with the club wrapped over his head. Angles are in the golfer's
+ * drawn frame (facing +x); FACE mirrors him at runtime.
+ */
 const ADDRESS: [number, number, number] = [-18, -12, 0];
-const TOP: [number, number, number] = [150, -42, -7];
-const FINISH: [number, number, number] = [-142, -104, -9];
+const TOP: [number, number, number] = [-150, -100, -4];
+const THRU: [number, number, number] = [75, 0, 3];
+const FINISH: [number, number, number] = [165, 130, 6];
 const CARRY: [number, number, number] = [-12, -125, 0];
+const linear = (x: number) => x;
 
 /** One clean shot: swing at the start, then walk after it. Ball launches at t = 0.09. */
 const SHOT_KEYS: Key[] = [
@@ -80,6 +90,7 @@ const SHOT_KEYS: Key[] = [
   [0.01, ...ADDRESS],
   [0.05, ...TOP, easeInOut],
   [0.09, ...ADDRESS, easeIn],
+  [0.12, ...THRU, linear],
   [0.17, ...FINISH, easeOut],
   [0.2, ...FINISH],
   [0.28, ...CARRY, easeInOut],
@@ -94,6 +105,7 @@ const MISS_KEYS: Key[] = [
   [0.01, ...ADDRESS],
   [0.035, ...TOP, easeInOut],
   [0.06, ...ADDRESS, easeIn],
+  [0.085, ...THRU, linear],
   [0.12, ...FINISH, easeOut],
   [0.15, ...FINISH],
   [0.2, ...CARRY, easeInOut],
@@ -102,6 +114,7 @@ const MISS_KEYS: Key[] = [
   [0.43, ...ADDRESS],
   [0.46, ...TOP, easeInOut],
   [0.5, ...ADDRESS, easeIn],
+  [0.53, ...THRU, linear],
   [0.57, ...FINISH, easeOut],
   [0.6, ...FINISH],
   [0.66, ...CARRY, easeInOut],
@@ -128,7 +141,10 @@ function pose(t: number, keys: Key[]): [number, number, number] {
     const [t0, a0, b0, c0] = keys[i - 1];
     if (t <= t1) {
       const k = ez((t - t0) / (t1 - t0));
-      return [lerp(a0, a1, k), lerp(b0, b1, k), lerp(c0, c1, k)];
+      // the club turns the short way round, so it wraps over his head at the finish
+      const db = ((((b1 - b0) % 360) + 540) % 360) - 180;
+      const b = ((((b0 + db * k) % 360) + 540) % 360) - 180;
+      return [lerp(a0, a1, k), b, lerp(c0, c1, k)];
     }
   }
   const l = keys[keys.length - 1];
@@ -192,7 +208,7 @@ function buildGeometry(w: number, n: number) {
     };
   });
 
-  const stand = (p: Pt): Pt => ({ x: p.x - reach, y: p.y });
+  const stand = (p: Pt): Pt => ({ x: p.x - FACE * reach, y: p.y });
 
   const segs: Seg[] = lens.map((len, i) => {
     const A = stops[i];
@@ -655,8 +671,8 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
       ) => {
         // both hands are on the club unless it is slung over his shoulder
         const grip = clamp((c + 125) / 21) * (1 - amp);
-        const back = grip * clamp(a / 150); // backswing
-        const thru = grip * clamp(-(a + 18) / 124); // follow-through
+        const back = grip * clamp((-18 - a) / 132); // backswing
+        const thru = grip * clamp((a + 18) / 183); // follow-through
 
         // legs: [thigh, shin] angles; A is the trail leg, B the lead leg
         const sw = Math.sin(ph);
@@ -783,7 +799,7 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
 
       const wag = Math.sin(y * 0.09) * 26;
       // phones have no room behind him, so she sits at his heel instead
-      const dogOff = mobile ? { x: -6 * scale, y: 21 * scale } : { x: -34 * scale, y: 7 * scale };
+      const dogOff = mobile ? { x: -6 * FACE * scale, y: 21 * scale } : { x: -34 * FACE * scale, y: 7 * scale };
 
       if (y >= last.y) {
         /* ── the putt ── */
@@ -791,10 +807,12 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
         const [a, c, lean] = pose(t, PUTT_KEYS);
         const party = clamp((t - 0.7) / 0.12);
         const hop = t > 0.82 ? -Math.abs(Math.sin(((t - 0.82) / 0.18) * Math.PI * 3)) * 7 * (1 - (t - 0.82) / 0.18) : 0;
-        const gx = last.x - reach;
-        setGolfer(gx, last.y + hop, 1, a, c, lean, 0, 0, party);
+        // putt toward the cup, whichever side of the ball it's on
+        const pf = cup.x < last.x ? -1 : cup.x > last.x ? 1 : FACE;
+        const gx = last.x - pf * reach;
+        setGolfer(gx, last.y + hop, pf, a, c, lean, 0, 0, party);
         const dogHop = t > 0.78 ? -Math.abs(Math.sin(((t - 0.78) / 0.22) * Math.PI * 4)) * 12 * (1 - (t - 0.78) / 0.22) : 0;
-        setDog(gx + dogOff.x, last.y + dogOff.y + dogHop, 1, 0, 0, 1 - party, wag * (1 + 2 * party));
+        setDog(gx + dogOff.x * FACE * pf, last.y + dogOff.y + dogHop, pf, 0, 0, 1 - party, wag * (1 + 2 * party));
 
         const s = clamp((t - 0.16) / 0.46);
         const roll = 1 - Math.pow(1 - s, 2.2);
@@ -854,7 +872,7 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
       // walking: step length drives the leg cycle, and he turns to face where he is headed
       const walkAt = (tt: number) => {
         let pos = seg.walks[0].from;
-        let ph = 0, amp = 0, face = 1;
+        let ph = 0, amp = 0, face: number = FACE;
         for (const wk of seg.walks) {
           if (tt >= wk.t0) {
             const raw = clamp((tt - wk.t0) / (wk.t1 - wk.t0));
@@ -864,10 +882,10 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
             ph = ((kk * dist) / (44 * scale)) * Math.PI * 2;
             amp = raw > 0 && raw < 1 ? clamp(Math.min(raw, 1 - raw) / 0.07) : 0;
             const dx = wk.to.x - wk.from.x;
-            const dir = Math.abs(dx) > 30 ? Math.sign(dx) : 1;
+            const dir = Math.abs(dx) > 30 ? Math.sign(dx) : FACE;
             const turn = raw < 1 ? clamp(raw / 0.05) : 0;
             const turnBack = clamp((raw - 0.95) / 0.05);
-            face = lerp(1, dir, turn * (1 - turnBack));
+            face = lerp(FACE, dir, turn * (1 - turnBack));
             if (Math.abs(face) < 0.12) face = face < 0 ? -0.12 : 0.12;
           }
         }
