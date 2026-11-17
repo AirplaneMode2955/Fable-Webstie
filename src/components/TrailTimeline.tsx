@@ -78,7 +78,9 @@ type Key = [number, number, number, number, ((x: number) => number)?];
  * drawn frame (facing +x); FACE mirrors him at runtime.
  */
 const ADDRESS: [number, number, number] = [-18, -12, 0];
-const TOP: [number, number, number] = [-150, -100, -4];
+// lead arm level with the club straight up, then a deep top with the club behind him
+const HALF: [number, number, number] = [-95, -95, -2];
+const TOP: [number, number, number] = [-168, -100, -4];
 const THRU: [number, number, number] = [75, 0, 3];
 const FINISH: [number, number, number] = [165, 130, 6];
 const CARRY: [number, number, number] = [-12, -125, 0];
@@ -88,7 +90,8 @@ const linear = (x: number) => x;
 const SHOT_KEYS: Key[] = [
   [0, ...ADDRESS],
   [0.01, ...ADDRESS],
-  [0.05, ...TOP, easeInOut],
+  [0.032, ...HALF, easeIn],
+  [0.05, ...TOP, easeOut],
   [0.09, ...ADDRESS, easeIn],
   [0.12, ...THRU, linear],
   [0.17, ...FINISH, easeOut],
@@ -103,7 +106,8 @@ const SHOT_KEYS: Key[] = [
 const MISS_KEYS: Key[] = [
   [0, ...ADDRESS],
   [0.01, ...ADDRESS],
-  [0.035, ...TOP, easeInOut],
+  [0.024, ...HALF, easeIn],
+  [0.035, ...TOP, easeOut],
   [0.06, ...ADDRESS, easeIn],
   [0.085, ...THRU, linear],
   [0.12, ...FINISH, easeOut],
@@ -112,7 +116,8 @@ const MISS_KEYS: Key[] = [
   [0.36, ...CARRY],
   [0.4, ...ADDRESS, easeInOut],
   [0.43, ...ADDRESS],
-  [0.46, ...TOP, easeInOut],
+  [0.447, ...HALF, easeIn],
+  [0.46, ...TOP, easeOut],
   [0.5, ...ADDRESS, easeIn],
   [0.53, ...THRU, linear],
   [0.57, ...FINISH, easeOut],
@@ -648,7 +653,7 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
     (p: number) => {
       const el = rig.current;
       const need = [
-        "ball", "ballBody", "ballShadow", "golfer", "rig", "body", "head", "arm", "club", "farUpper", "farFore", "farHand",
+        "ball", "ballBody", "ballShadow", "golfer", "rig", "body", "head", "arm", "club", "armBack", "clubBack", "farUpper", "farFore", "farHand",
         "legA", "shinA", "legB", "shinB", "golferShadow", "flag", "puff", "divot", "bubble",
         "dog", "dogBody", "dogTail", "dogHead", "dogLegFA", "dogLegFB", "dogLegBA", "dogLegBB", "dogShadow",
       ];
@@ -701,6 +706,12 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
         set("head", `rotate(${headTilt} 3 -43)`);
         set("arm", `rotate(${a} 3 -39)`);
         set("club", `translate(3 -19) rotate(${c})`);
+        set("armBack", `rotate(${a} 3 -39)`);
+        set("clubBack", `translate(3 -19) rotate(${c})`);
+        // high in the backswing and the finish, the hands and club go behind his head, not through it
+        const behind = grip > 0.5 && (a < -100 || a > 95);
+        fade("arm", behind ? 0 : 1);
+        fade("armBack", behind ? 1 : 0);
         (el.golferShadow as SVGElement).setAttribute("rx", String(11 + 3 * amp * Math.abs(sw)));
 
         // far arm: two-bone reach to the grip, or swinging free on the walk
@@ -1067,6 +1078,18 @@ export default function TrailTimeline({ events }: { events: TimelineEvent[] }) {
                     </g>
                   </g>
                   <g ref={part("body")}>
+                    {/* same arm and club, drawn behind his body for the top and the finish */}
+                    <g ref={part("armBack")} style={{ opacity: 0 }}>
+                      <g ref={part("clubBack")}>
+                        <line x1={0} y1={0} x2={0} y2={23} stroke="#cfd3d6" strokeWidth={1.3} strokeLinecap="round" />
+                        <line x1={0} y1={-3.5} x2={0} y2={4.5} stroke="#15191c" strokeWidth={2.2} strokeLinecap="round" />
+                        <path d="M -1.2 21.6 Q 4 20.4 7.6 22 Q 8.8 24.6 6.4 25.6 L -0.4 25.4 Q -2 23.6 -1.2 21.6 Z" fill="#23282c" />
+                        <line x1={-0.6} y1={25.3} x2={6.3} y2={25.5} stroke="#cfd3d6" strokeWidth={0.7} />
+                      </g>
+                      <line x1={3} y1={-39} x2={3} y2={-20} stroke="#e3b796" strokeWidth={3.4} strokeLinecap="round" />
+                      <line x1={3} y1={-39} x2={3} y2={-31} stroke="url(#aloha)" strokeWidth={5.6} strokeLinecap="round" />
+                      <circle cx={3} cy={-19} r={2.3} fill="#e3b796" />
+                    </g>
                     {/* far (left) arm, gloved */}
                     <line ref={part("farUpper")} stroke="url(#alohaShade)" strokeWidth={4.6} strokeLinecap="round" />
                     <line ref={part("farFore")} stroke="#c69c7c" strokeWidth={3} strokeLinecap="round" />
